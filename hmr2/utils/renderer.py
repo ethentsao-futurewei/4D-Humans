@@ -6,6 +6,7 @@ import numpy as np
 import pyrender
 import trimesh
 import cv2
+import sys
 from yacs.config import CfgNode
 from typing import List, Optional
 
@@ -150,10 +151,10 @@ class Renderer:
         self.faces = faces
 
     def __call__(self,
-                vertices: np.array,
-                camera_translation: np.array,
-                image: torch.Tensor,
-                full_frame: bool = False,
+                vertices: np.array, # Mesh vertices.
+                camera_translation: np.array, # Camera extrinsic - translation
+                image: torch.Tensor, # Image with normalized value.
+                full_frame: bool = False, # Render on full image flag.
                 imgname: Optional[str] = None,
                 side_view=False, top_view=False,
                 rot_angle=90,
@@ -176,46 +177,46 @@ class Renderer:
         else:
             image = image.clone() * torch.tensor(self.cfg.MODEL.IMAGE_STD, device=image.device).reshape(3,1,1)
             image = image + torch.tensor(self.cfg.MODEL.IMAGE_MEAN, device=image.device).reshape(3,1,1)
-            image = image.permute(1, 2, 0).cpu().numpy()
+            image = image.permute(1, 2, 0).cpu().numpy() # from tensor to numpy: [C, H, W] to [H, W, C]
 
         renderer = pyrender.OffscreenRenderer(viewport_width=image.shape[1],
                                               viewport_height=image.shape[0],
-                                              point_size=1.0)
+                                              point_size=1.0) # Set the rendered.
         material = pyrender.MetallicRoughnessMaterial(
             metallicFactor=0.0,
             alphaMode='OPAQUE',
-            baseColorFactor=(*mesh_base_color, 1.0))
+            baseColorFactor=(*mesh_base_color, 1.0)) # Set the material.
 
         camera_translation[0] *= -1.
 
-        mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy())
+        mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy()) # Set the mesh.
         if side_view:
             rot = trimesh.transformations.rotation_matrix(
-                np.radians(rot_angle), [0, 1, 0])
-            mesh.apply_transform(rot)
+                np.radians(rot_angle), [0, 1, 0]) # Set the rotation matirx for the side view.
+            mesh.apply_transform(rot) # Apply to the mesh.
         elif top_view:
             rot = trimesh.transformations.rotation_matrix(
-                np.radians(rot_angle), [1, 0, 0])
-            mesh.apply_transform(rot)
+                np.radians(rot_angle), [1, 0, 0]) # Set the rotation matirx for the top view.
+            mesh.apply_transform(rot) # Apply to the mesh.
         rot = trimesh.transformations.rotation_matrix(
-            np.radians(180), [1, 0, 0])
-        mesh.apply_transform(rot)
-        mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
+            np.radians(180), [1, 0, 0]) # Set the rotation matirx for the default view.
+        mesh.apply_transform(rot) # Apply to the mesh.
+        mesh = pyrender.Mesh.from_trimesh(mesh, material=material) # Set the MESH from trimesh.
 
         scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
                                ambient_light=(0.3, 0.3, 0.3))
-        scene.add(mesh, 'mesh')
+        scene.add(mesh, 'mesh') # Set the mesh to scene.
 
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
         camera_center = [image.shape[1] / 2., image.shape[0] / 2.]
         camera = pyrender.IntrinsicsCamera(fx=self.focal_length, fy=self.focal_length,
-                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
-        scene.add(camera, pose=camera_pose)
+                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12) # Set the camera parameters.
+        scene.add(camera, pose=camera_pose) # Set the camera pose to scene.
 
 
         light_nodes = create_raymond_lights()
-        for node in light_nodes:
+        for node in light_nodes: # Add lights to the scene.
             scene.add_node(node)
 
         color, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
@@ -225,7 +226,7 @@ class Renderer:
         if return_rgba:
             return color
 
-        valid_mask = (color[:, :, -1])[:, :, np.newaxis]
+        valid_mask = (color[:, :, -1])[:, :, np.newaxis] # Check the foreground or background.
         if not side_view and not top_view:
             output_img = (color[:, :, :3] * valid_mask + (1 - valid_mask) * image)
         else:

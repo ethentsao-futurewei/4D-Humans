@@ -65,7 +65,7 @@ def main():
     os.makedirs(args.out_folder, exist_ok=True)
 
     # Get all demo images that end with .jpg or .png
-    img_paths = [img for end in args.file_type for img in Path(args.img_folder).glob(end)]
+    img_paths = sorted([img for end in args.file_type for img in Path(args.img_folder).glob(end)])
 
     # Iterate over all images in folder
     for img_path in img_paths:
@@ -91,12 +91,15 @@ def main():
                 out = model(batch) # SMPL output.
                 print("key", out["pred_keypoints_2d"].shape)
 
-            pred_cam = out['pred_cam']
-            box_center = batch["box_center"].float()
-            box_size = batch["box_size"].float()
-            img_size = batch["img_size"].float()
+            pred_cam = out['pred_cam'] # Get the camera extrinsic.
+            box_center = batch["box_center"].float() # Get the human bbx.
+            box_size = batch["box_size"].float() # Get the bbx size.
+            img_size = batch["img_size"].float() # Get the image size.
+            # print(img_path, img_size)
             scaled_focal_length = model_cfg.EXTRA.FOCAL_LENGTH / model_cfg.MODEL.IMAGE_SIZE * img_size.max()
+            # print(img_path, scaled_focal_length)
             pred_cam_t_full = cam_crop_to_full(pred_cam, box_center, box_size, img_size, scaled_focal_length).detach().cpu().numpy()
+            # print(img_path, pred_cam_t_full) # [1, 3]
 
             # Render the result
             batch_size = batch['img'].shape[0]
@@ -149,7 +152,7 @@ def main():
                     tmesh = renderer.vertices_to_trimesh(verts, camera_translation, LIGHT_BLUE)
                     tmesh.export(os.path.join(args.out_folder, f'{img_fn}_{person_id}.obj'))
 
-        # Render front view
+        # Render front view => all region.
         if args.full_frame and len(all_verts) > 0:
             misc_args = dict(
                 mesh_base_color=LIGHT_BLUE,
