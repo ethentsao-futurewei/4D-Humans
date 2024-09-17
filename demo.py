@@ -88,7 +88,8 @@ def main():
         for batch in dataloader:
             batch = recursive_to(batch, device)
             with torch.no_grad():
-                out = model(batch)
+                out = model(batch) # SMPL output.
+                print("key", out["pred_keypoints_2d"].shape)
 
             pred_cam = out['pred_cam']
             box_center = batch["box_center"].float()
