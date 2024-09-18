@@ -4,6 +4,7 @@ import argparse
 import os
 import cv2
 import numpy as np
+import sys
 
 from hmr2.configs import CACHE_DIR_4DHUMANS
 from hmr2.models import HMR2, download_models, load_hmr2, DEFAULT_CHECKPOINT
@@ -12,6 +13,28 @@ from hmr2.datasets.vitdet_dataset import ViTDetDataset, DEFAULT_MEAN, DEFAULT_ST
 from hmr2.utils.renderer import Renderer, cam_crop_to_full
 
 LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
+
+def check_keypoints_in_vertices(pred_keypoints_3d, pred_vertices, error=1e-3):
+    # Remove the 1st dim [1, x, 3] => [x, 3]
+    keypoints = pred_keypoints_3d.squeeze(0)  # [44, 3]
+    vertices = pred_vertices.squeeze(0)  # [6890, 3]
+
+    matching_results = []
+    
+    for keypoint in keypoints:
+        print(keypoint, vertices[0])
+        # Check the keypoint inside the vertices 中
+        match = np.any(np.all(np.isclose(vertices, keypoint, atol=error), axis=1))
+        matching_results.append(match)
+    
+    for i, match in enumerate(matching_results):
+        if match:
+            print(f"Keypoint {i} is present in pred_vertices.")
+        else:
+            print(f"Keypoint {i} is not present in pred_vertices.")
+    # print(np.sum(matching_results))
+    
+    return matching_results
 
 def main():
     import time
@@ -89,7 +112,7 @@ def main():
             batch = recursive_to(batch, device)
             with torch.no_grad():
                 out = model(batch) # SMPL output.
-                print("key", out["pred_keypoints_2d"].shape)
+                # print("key", out["pred_keypoints_2d"].shape)
 
             pred_cam = out['pred_cam'] # Get the camera extrinsic.
             box_center = batch["box_center"].float() # Get the human bbx.
@@ -100,6 +123,9 @@ def main():
             # print(img_path, scaled_focal_length)
             pred_cam_t_full = cam_crop_to_full(pred_cam, box_center, box_size, img_size, scaled_focal_length).detach().cpu().numpy()
             # print(img_path, pred_cam_t_full) # [1, 3]
+            
+            # Check keypoint inside the vertices
+            # _ = check_keypoints_in_vertices(out["pred_keypoints_3d"].detach().cpu().numpy(), out["pred_vertices"].detach().cpu().numpy())
 
             # Render the result
             batch_size = batch['img'].shape[0]
@@ -114,6 +140,7 @@ def main():
                 regression_img = renderer(out['pred_vertices'][n].detach().cpu().numpy(),
                                         out['pred_cam_t'][n].detach().cpu().numpy(),
                                         batch['img'][n],
+                                        out['pred_keypoints_3d'][n].detach().cpu().numpy(),
                                         mesh_base_color=LIGHT_BLUE,
                                         scene_bg_color=(1, 1, 1),
                                         )

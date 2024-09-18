@@ -154,6 +154,7 @@ class Renderer:
                 vertices: np.array, # Mesh vertices.
                 camera_translation: np.array, # Camera extrinsic - translation
                 image: torch.Tensor, # Image with normalized value.
+                keypoints_3d: np.array = None, # Mesh vertices.
                 full_frame: bool = False, # Render on full image flag.
                 imgname: Optional[str] = None,
                 side_view=False, top_view=False,
@@ -189,7 +190,7 @@ class Renderer:
 
         camera_translation[0] *= -1.
 
-        mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy()) # Set the mesh.
+        mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy()) # Set the mesh. Self.faces are fixed.
         if side_view:
             rot = trimesh.transformations.rotation_matrix(
                 np.radians(rot_angle), [0, 1, 0]) # Set the rotation matirx for the side view.
@@ -206,6 +207,36 @@ class Renderer:
         scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
                                ambient_light=(0.3, 0.3, 0.3))
         scene.add(mesh, 'mesh') # Set the mesh to scene.
+
+        # 1. Define multiple 3D point positions (for example, 3 points)
+        # point_positions = np.array([
+        #     [0, 0, 0],   # Point 1 at origin
+        #     [100, 100, 100],   # Point 2 at (1, 1, 1)
+        #     [-1, -1, -1] # Point 3 at (-1, -1, -1)
+        # ])
+        point_positions = keypoints_3d.copy()
+        breakpoint()
+
+        # 2. Create red material
+        red_material = pyrender.MetallicRoughnessMaterial(
+            baseColorFactor=[1.0, 0.0, 0.0, 1.0],  # RGBA for red
+            metallicFactor=0.0,
+            roughnessFactor=0.5
+        )
+
+        # 3. Loop over point positions and create spheres for each point
+        for point_position in point_positions:
+            sphere_radius = 0.01  # Set the radius small enough to look like a point
+            offset = 0.0
+            sphere_mesh = trimesh.creation.icosphere(subdivisions=2, radius=sphere_radius)
+            sphere_mesh.apply_translation(point_position + np.array([0, 0, offset]))  # Move the sphere to the desired position
+
+            # Create a Pyrender mesh for the sphere with red color
+            sphere_mesh.apply_transform(rot) # Apply to the mesh.
+            red_point = pyrender.Mesh.from_trimesh(sphere_mesh, material=red_material)
+
+            # Add the red point (sphere) to the scene
+            scene.add(red_point)
 
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
