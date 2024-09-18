@@ -186,7 +186,12 @@ def main():
                 scene_bg_color=(1, 1, 1),
                 focal_length=scaled_focal_length,
             )
-            cam_view = renderer.render_rgba_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[n], **misc_args)
+            # print(f"img size: {img_size[n]}") # [1024, 1024]
+            cam_view = renderer.render_rgba_multiple(all_verts, 
+                                                     keypoints_3d=out['pred_keypoints_3d'][n].detach().cpu().numpy(), 
+                                                     cam_t=all_cam_t, 
+                                                     render_res=img_size[n], 
+                                                     **misc_args) # [1024, 1024, 4]
 
             # Overlay image
             input_img = img_cv2.astype(np.float32)[:,:,::-1]/255.0

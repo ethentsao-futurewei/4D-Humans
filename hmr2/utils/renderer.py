@@ -144,6 +144,7 @@ class Renderer:
             faces (np.array): Array of shape (F, 3) containing the mesh faces.
         """
         self.cfg = cfg
+        # print(self.cfg)
         self.focal_length = cfg.EXTRA.FOCAL_LENGTH
         self.img_res = cfg.MODEL.IMAGE_SIZE
 
@@ -215,7 +216,6 @@ class Renderer:
         #     [-1, -1, -1] # Point 3 at (-1, -1, -1)
         # ])
         point_positions = keypoints_3d.copy()
-        breakpoint()
 
         # 2. Create red material
         red_material = pyrender.MetallicRoughnessMaterial(
@@ -241,6 +241,7 @@ class Renderer:
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
         camera_center = [image.shape[1] / 2., image.shape[0] / 2.]
+        # print(self.focal_length, camera_center) # 5000, [128.0, 128.0]
         camera = pyrender.IntrinsicsCamera(fx=self.focal_length, fy=self.focal_length,
                                            cx=camera_center[0], cy=camera_center[1], zfar=1e12) # Set the camera parameters.
         scene.add(camera, pose=camera_pose) # Set the camera pose to scene.
@@ -273,7 +274,6 @@ class Renderer:
         #     alphaMode='OPAQUE',
         #     baseColorFactor=(*mesh_base_color, 1.0))
         vertex_colors = np.array([(*mesh_base_color, 1.0)] * vertices.shape[0])
-        print(vertices.shape, camera_translation.shape)
         mesh = trimesh.Trimesh(vertices.copy() + camera_translation, self.faces.copy(), vertex_colors=vertex_colors)
         # mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy())
         
@@ -284,11 +284,12 @@ class Renderer:
         rot = trimesh.transformations.rotation_matrix(
             np.radians(180), [1, 0, 0])
         mesh.apply_transform(rot)
-        return mesh
+        return (mesh, rot)
 
     def render_rgba(
             self,
             vertices: np.array,
+            keypoints_3d: np.array = None, # Mesh vertices.
             cam_t = None,
             rot=None,
             rot_axis=[1,0,0],
@@ -314,7 +315,7 @@ class Renderer:
         else:
             camera_translation = np.array([0, 0, camera_z * self.focal_length/render_res[1]])
 
-        mesh = self.vertices_to_trimesh(vertices, camera_translation, mesh_base_color, rot_axis, rot_angle)
+        (mesh, _) = self.vertices_to_trimesh(vertices, camera_translation, mesh_base_color, rot_axis, rot_angle)
         mesh = pyrender.Mesh.from_trimesh(mesh)
         # mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
 
@@ -348,6 +349,7 @@ class Renderer:
             self,
             vertices: List[np.array],
             cam_t: List[np.array],
+            keypoints_3d: np.array = None, # Mesh vertices.
             rot_axis=[1,0,0],
             rot_angle=0,
             mesh_base_color=(1.0, 1.0, 0.9),
@@ -364,12 +366,43 @@ class Renderer:
         #     alphaMode='OPAQUE',
         #     baseColorFactor=(*mesh_base_color, 1.0))
 
-        mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle)) for vvv,ttt in zip(vertices, cam_t)]
+        mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle)[0]) for vvv,ttt in zip(vertices, cam_t)]
 
         scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
                                ambient_light=(0.3, 0.3, 0.3))
         for i,mesh in enumerate(mesh_list):
             scene.add(mesh, f'mesh_{i}')
+
+        # 1. Define multiple 3D point positions (for example, 3 points)
+        # point_positions = np.array([
+        #     [0, 0, 0],   # Point 1 at origin
+        #     [100, 100, 100],   # Point 2 at (1, 1, 1)
+        #     [-1, -1, -1] # Point 3 at (-1, -1, -1)
+        # ])
+        point_positions = keypoints_3d.copy()
+
+        # 2. Create red material
+        red_material = pyrender.MetallicRoughnessMaterial(
+            baseColorFactor=[1.0, 0.0, 0.0, 1.0],  # RGBA for red
+            metallicFactor=0.0,
+            roughnessFactor=0.5
+        )
+
+        # 3. Loop over point positions and create spheres for each point
+        for point_position in point_positions:
+            rot = trimesh.transformations.rotation_matrix(
+                np.radians(180), [1, 0, 0])
+            sphere_radius = 0.01  # Set the radius small enough to look like a point
+            offset = 0.0
+            sphere_mesh = trimesh.creation.icosphere(subdivisions=2, radius=sphere_radius)
+            sphere_mesh.apply_translation(point_position + np.array([0, 0, offset])+ cam_t[0])  # Move the sphere to the desired position
+
+            # Create a Pyrender mesh for the sphere with red color
+            sphere_mesh.apply_transform(rot) # Apply to the mesh.
+            red_point = pyrender.Mesh.from_trimesh(sphere_mesh, material=red_material)
+
+            # Add the red point (sphere) to the scene
+            scene.add(red_point)
 
         camera_pose = np.eye(4)
         # camera_pose[:3, 3] = camera_translation
@@ -377,6 +410,9 @@ class Renderer:
         focal_length = focal_length if focal_length is not None else self.focal_length
         camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
                                            cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+        print(focal_length, camera_center) # [20000, 512, 512]
+        # camera = pyrender.IntrinsicsCamera(fx=20000, fy=20000,
+        #                                    cx=517.0732592262409, cy=518.097867316907, zfar=1e12) # Set the camera parameters.
 
         # Create camera node and add it to pyRender scene
         camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
@@ -391,6 +427,7 @@ class Renderer:
         color, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
         color = color.astype(np.float32) / 255.0
         renderer.delete()
+        breakpoint()
 
         return color
 
