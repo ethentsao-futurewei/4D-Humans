@@ -134,6 +134,14 @@ def create_raymond_lights() -> List[pyrender.Node]:
 
     return nodes
 
+
+def project_3d_to_2d_point(K, point_3d):
+    point_2d = np.dot(K, point_3d[:3])  # 3D -> 2D in homogeneous coordinates
+    point_2d =  point_2d[:2] /  point_2d[2]  # Normalize by depth (Z)
+
+    return point_2d
+
+
 class Renderer:
 
     def __init__(self, cfg: CfgNode, faces: np.array):
@@ -410,8 +418,8 @@ class Renderer:
         focal_length = focal_length if focal_length is not None else self.focal_length
         camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
                                            cx=camera_center[0], cy=camera_center[1], zfar=1e12)
-        print(focal_length, camera_center) # [20000, 512, 512]
-        # camera = pyrender.IntrinsicsCamera(fx=20000, fy=20000,
+        # print(focal_length, camera_center) # [20000, 512, 512]
+        # camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
         #                                    cx=517.0732592262409, cy=518.097867316907, zfar=1e12) # Set the camera parameters.
 
         # Create camera node and add it to pyRender scene
@@ -427,9 +435,107 @@ class Renderer:
         color, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
         color = color.astype(np.float32) / 255.0
         renderer.delete()
-        breakpoint()
+        # breakpoint()
 
         return color
+    
+    def render_key_points_multiple(
+                self,
+                keypoints_3d: np.array, # Mesh vertices.
+                cam_t: List[np.array],
+                rot_axis=[1,0,0],
+                rot_angle=0,
+                mesh_base_color=(1.0, 1.0, 0.9),
+                scene_bg_color=(0,0,0),
+                render_res=[256, 256],
+                focal_length=None,
+            ):
+
+            renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
+                                                viewport_height=render_res[1],
+                                                point_size=1.0)
+            
+            scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
+                                ambient_light=(0.3, 0.3, 0.3))
+            
+            # Point rendering.
+            camera_pose = np.eye(4)
+            camera_center = [render_res[0] / 2., render_res[1] / 2.]
+            focal_length = focal_length if focal_length is not None else self.focal_length
+            camera_center = [render_res[0] / 2., render_res[1] / 2.]
+            K = np.array([
+                [focal_length.detach().cpu().numpy(), 0, camera_center[0].detach().cpu().numpy()],
+                [0, focal_length.detach().cpu().numpy(), camera_center[1].detach().cpu().numpy()],
+                [0, 0, 1]
+            ])
+
+            # 1. Define multiple 3D point positions (for example, 3 points)
+            # point_positions = np.array([
+            #     [0, 0, 0],   # Point 1 at origin
+            #     [100, 100, 100],   # Point 2 at (1, 1, 1)
+            #     [-1, -1, -1] # Point 3 at (-1, -1, -1)
+            # ])
+            point_positions = keypoints_3d.copy()
+
+            # 2. Create red material
+            red_material = pyrender.MetallicRoughnessMaterial(
+                baseColorFactor=[1.0, 0.0, 0.0, 1.0],  # RGBA for red
+                metallicFactor=0.0,
+                roughnessFactor=0.5
+            )
+
+            image_red_pixel = np.ones((1024, 1024, 4), dtype=np.uint8) * 255  # White image (255 for all RGB channels)
+            image_red_pixel_list = []
+
+            # 3. Loop over point positions and create spheres for each point
+            for point_position in point_positions:
+                rot = trimesh.transformations.rotation_matrix(
+                    np.radians(180), [1, 0, 0])
+                sphere_radius = 0.01  # Set the radius small enough to look like a point
+                offset = 0.0
+                sphere_mesh = trimesh.creation.icosphere(subdivisions=2, radius=sphere_radius)
+                sphere_mesh.apply_translation(point_position + np.array([0, 0, offset]) + cam_t[0])  # Move the sphere to the desired position
+                point_2d = project_3d_to_2d_point(K, sphere_mesh.centroid) # No need to ratate.
+
+                # Create a Pyrender mesh for the sphere with red color
+                sphere_mesh.apply_transform(rot) # Apply to the mesh.
+                red_point = pyrender.Mesh.from_trimesh(sphere_mesh, material=red_material)
+
+                # Add the red point (sphere) to the scene
+                scene.add(red_point)
+
+                # point_2d = project_3d_to_2d_point(K, sphere_mesh.centroid)
+                # Round the point to the nearest integer to match pixel coordinates
+                x, y = int(round(point_2d[0])), int(round(point_2d[1]))
+                image_red_pixel_list.append([x, y])
+                # Make sure the point is within the bounds of the image
+                if 0 <= x < 1024 and 0 <= y < 1024:
+                    image_red_pixel[y, x] = [0, 0, 255, 255]  # Set the pixel at (x, y) to red [R, G, B, A] = [255, 0, 0, 255]
+
+            camera_pose = np.eye(4)
+            # camera_pose[:3, 3] = camera_translation
+            camera_center = [render_res[0] / 2., render_res[1] / 2.]
+            focal_length = focal_length if focal_length is not None else self.focal_length
+            camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
+                                            cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+            # camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
+            #                                    cx=517.0732592262409, cy=518.097867316907, zfar=1e12) # Set the camera parameters.
+
+            # Create camera node and add it to pyRender scene
+            camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
+            scene.add_node(camera_node)
+            self.add_lighting(scene, camera_node)
+
+            light_nodes = create_raymond_lights()
+            for node in light_nodes:
+                scene.add_node(node)
+
+            color, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+            color = color.astype(np.float32) / 255.0
+            renderer.delete()
+            # breakpoint()
+
+            return color, image_red_pixel, np.array(image_red_pixel_list)
 
     def add_lighting(self, scene, cam_node, color=np.ones(3), intensity=1.0):
         # from phalp.visualize.py_renderer import get_light_poses

@@ -22,7 +22,6 @@ def check_keypoints_in_vertices(pred_keypoints_3d, pred_vertices, error=1e-3):
     matching_results = []
     
     for keypoint in keypoints:
-        print(keypoint, vertices[0])
         # Check the keypoint inside the vertices 中
         match = np.any(np.all(np.isclose(vertices, keypoint, atol=error), axis=1))
         matching_results.append(match)
@@ -99,7 +98,7 @@ def main():
 
         det_instances = det_out['instances']
         valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
-        boxes=det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
+        boxes = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
 
         # Run HMR2.0 on all detected humans
         dataset = ViTDetDataset(model_cfg, img_cv2, boxes)
@@ -165,7 +164,7 @@ def main():
                                             top_view=True)
                     final_img = np.concatenate([final_img, top_img], axis=1)
 
-                cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_{person_id}.png'), 255*final_img[:, :, ::-1])
+                # cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_{person_id}.png'), 255*final_img[:, :, ::-1])
 
                 # Add all verts and cams to list
                 verts = out['pred_vertices'][n].detach().cpu().numpy()
@@ -179,8 +178,9 @@ def main():
                     tmesh = renderer.vertices_to_trimesh(verts, camera_translation, LIGHT_BLUE)
                     tmesh.export(os.path.join(args.out_folder, f'{img_fn}_{person_id}.obj'))
 
-        # Render front view => all region.
+        # Render front view => all region, all people.
         if args.full_frame and len(all_verts) > 0:
+            pred_keypoints_3d_numpy = out['pred_keypoints_3d'][n].detach().cpu().numpy()
             misc_args = dict(
                 mesh_base_color=LIGHT_BLUE,
                 scene_bg_color=(1, 1, 1),
@@ -188,7 +188,12 @@ def main():
             )
             # print(f"img size: {img_size[n]}") # [1024, 1024]
             cam_view = renderer.render_rgba_multiple(all_verts, 
-                                                     keypoints_3d=out['pred_keypoints_3d'][n].detach().cpu().numpy(), 
+                                                     keypoints_3d=pred_keypoints_3d_numpy, 
+                                                     cam_t=all_cam_t, 
+                                                     render_res=img_size[n], 
+                                                     **misc_args) # [1024, 1024, 4]
+            
+            cam_view_key_points, image_red_pixels, image_red_pixels_array = renderer.render_key_points_multiple(keypoints_3d=pred_keypoints_3d_numpy, 
                                                      cam_t=all_cam_t, 
                                                      render_res=img_size[n], 
                                                      **misc_args) # [1024, 1024, 4]
@@ -197,8 +202,15 @@ def main():
             input_img = img_cv2.astype(np.float32)[:,:,::-1]/255.0
             input_img = np.concatenate([input_img, np.ones_like(input_img[:,:,:1])], axis=2) # Add alpha channel
             input_img_overlay = input_img[:,:,:3] * (1-cam_view[:,:,3:]) + cam_view[:,:,:3] * cam_view[:,:,3:]
-
             cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all.png'), 255*input_img_overlay[:, :, ::-1])
+
+            input_img = np.concatenate([np.ones_like(input_img[:,:,:]), np.ones_like(input_img[:,:,:1])], axis=2) # Add alpha channel
+            input_img_overlay = input_img[:,:,:3] * (1-cam_view_key_points[:,:,3:]) + cam_view_key_points[:,:,:3] * cam_view_key_points[:,:,3:]
+            non_white_pixels = np.sum(np.any(image_red_pixels[:, :, :-1] != [255, 255, 255], axis=-1))
+            print(f"Number of non-white pixels: {non_white_pixels}")
+            cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_key_points.png'), 255*input_img_overlay[:, :, ::-1])
+            cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_red_pixels.png'), image_red_pixels)
+            np.save(os.path.join(args.out_folder, f'{img_fn}_red_pixels_array.npy'), image_red_pixels_array)
 
         end = time.time()
         print(end - start)
